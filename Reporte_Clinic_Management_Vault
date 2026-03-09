@@ -1,0 +1,21 @@
+# Reporte Técnico: Clinic Management Vault
+
+## 1. Almacenamiento y PDAs
+Este contrato utiliza Program Derived Addresses (PDAs) para estructurar una jerarquía de datos clara entre el administrador, el consultorio y sus pacientes.
+
+### Estructura de las PDAs
+La dirección de las cuentas se deriva de la siguiente manera:
+* **Consultorio**: Se deriva usando la semilla estática `"consultorio"` y la llave pública del **Admin**. Esto asegura que cada doctor gestione su propia entidad.
+* **Paciente**: Se deriva usando la semilla `"paciente"`, la llave pública del **Consultorio** y el **Nombre del Paciente**. Esto permite tener múltiples expedientes únicos bajo una misma clínica.
+
+## 2. Gestión de Espacio
+Se ha realizado un cálculo exhaustivo del espacio en la cuenta (Account Space) para optimizar los costos de almacenamiento en Solana:
+* **Identificadores**: Uso de `Pubkey` (32 bytes) para vinculación de cuentas.
+* **Cadenas de Texto**: Soporte para nombres de clínica y pacientes con límites definidos (4 bytes de prefijo + tamaño máximo * 4 para UTF-8).
+* **Registros Médicos**: Espacio dinámico para el último tratamiento y uso de `i64` para marcas de tiempo (timestamps) precisas.
+
+## 3. Seguridad y Validación
+El sistema implementa capas de seguridad robustas:
+* **Autorización**: Uso de `Signer` y restricciones `has_one` para asegurar que solo el administrador del consultorio pueda modificar sus pacientes.
+* **Integridad de Datos**: Validaciones mediante `require!` que verifican la longitud de los textos antes de escribir en la blockchain.
+* **Relación Jerárquica**: Los pacientes están ligados a la cuenta del consultorio, no solo a la billetera, permitiendo una trazabilidad total.
