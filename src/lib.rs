@@ -1,163 +1,133 @@
 use anchor_lang::prelude::*;
 
-declare_id!("hpGG7v5Y5XFtT96thymVC9sAxUNUGPHygjuzgoTcFp3");
+declare_id!("AqC74PpqtSo9qpffPSd4npC6wchULpiDBSe7SwxFVnfK"); 
+
+// --- Constantes de Tamaño ---
+const MAX_CLINIC_NAME: usize = 50 * 4;
+const MAX_PATIENT_NAME: usize = 40 * 4;
+const MAX_TREATMENT: usize = 100 * 4;
 
 #[program]
-pub mod lumen {
+pub mod clinic_management {
     use super::*;
 
-    /// Crea un nuevo producto en la tienda virtual.
-    /// Cada producto se almacena en una PDA única basada en:
-    ///   - "item_v1"
-    ///   - owner_pubkey
-    ///   - título del producto
-    pub fn add_item(ctx: Context<AddItem>, title: String, price: u64) -> Result<()> {
-        // Validaciones de entrada
-        require!(title.len() > 0 && title.len() <= 32, LumenError::InvalidTitleLength);
-        require!(price > 0, LumenError::InvalidPrice);
-
-        let item = &mut ctx.accounts.store_item;
-
-        item.owner = *ctx.accounts.owner.key;
-        item.title = title;
-        item.price = price;
-        item.is_available = true;
-        item.bump = ctx.bumps.store_item;
-
-        msg!("LUMEN: Producto '{}' registrado exitosamente.", item.title);
+    // nicializa el consultorio (Solo el médico/admin)
+    pub fn inicializar_consultorio(ctx: Context<InicializarConsultorio>, nombre: String) -> Result<()> {
+        let consultorio = &mut ctx.accounts.consultorio;
+        require!(nombre.chars().count() <= 50, ClinicError::TextoLargo);
+        
+        consultorio.admin = ctx.accounts.admin.key();
+        consultorio.nombre = nombre;
+        consultorio.total_pacientes = 0;
+        
+        msg!("Consultorio '{}' creado exitosamente", consultorio.nombre);
         Ok(())
     }
 
-    /// Actualiza el precio y la disponibilidad de un producto.
-    /// El sistema valida automáticamente que el `owner` sea el dueño real.
-    pub fn update_item(
-        ctx: Context<UpdateItem>,
-        price: u64,
-        is_available: bool,
+    // Registrar un nuevo paciente en el consultorio
+    pub fn registrar_paciente(
+        ctx: Context<RegistrarPaciente>, 
+        nombre: String, 
+        especie: String
     ) -> Result<()> {
-        require!(price > 0, LumenError::InvalidPrice);
+        let paciente = &mut ctx.accounts.paciente;
+        let consultorio = &mut ctx.accounts.consultorio;
 
-        let item = &mut ctx.accounts.store_item;
+        paciente.consultorio = consultorio.key();
+        paciente.nombre = nombre;
+        paciente.especie = especie;
+        paciente.ultima_visita = Clock::get()?.unix_timestamp;
+        
+        //Incrementamos el contador del consultorio
+        consultorio.total_pacientes += 1;
 
-        item.price = price;
-        item.is_available = is_available;
-
-        msg!("LUMEN: Producto '{}' actualizado correctamente.", item.title);
+        msg!("Paciente {} registrado en el consultorio", paciente.nombre);
         Ok(())
     }
 
-    /// Elimina un producto y devuelve la renta (SOL) al propietario.
-    pub fn delete_item(ctx: Context<DeleteItem>) -> Result<()> {
-        let item = &ctx.accounts.store_item;
+    //Añadir una nota médica o tratamiento
+    pub fn añadir_tratamiento(ctx: Context<GestionarPaciente>, nota: String, costo: u64) -> Result<()> {
+        let paciente = &mut ctx.accounts.paciente;
+        
+        paciente.ultimo_tratamiento = nota;
+        paciente.ultima_visita = Clock::get()?.unix_timestamp;
+        paciente.deuda_pendiente += costo;
 
-        msg!(
-            "LUMEN: Producto '{}' eliminado. Renta devuelta al propietario {}.",
-            item.title,
-            item.owner
-        );
-
+        msg!("Tratamiento actualizado para {}", paciente.nombre);
         Ok(())
     }
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               MODELO DE DATOS                              */
-/* -------------------------------------------------------------------------- */
+// --- Estructuras de Datos ---
+
+
 
 #[account]
-pub struct StoreItem {
-    pub owner: Pubkey,      // Dueño del producto
-    pub title: String,      // Nombre del producto
-    pub price: u64,         // Precio en lamports
-    pub is_available: bool, // Disponibilidad
-    pub bump: u8,           // Bump de la PDA
+pub struct Consultorio {
+    pub admin: Pubkey,       // 32
+    pub nombre: String,      // 4 + MAX_CLINIC_NAME
+    pub total_pacientes: u64, // 8
 }
 
-impl StoreItem {
-    // Cálculo del espacio necesario para la cuenta
-    // 8  -> Discriminador
-    // 32 -> Pubkey
-    // 4 + 32 -> String (máx 32 chars)
-    // 8  -> u64
-    // 1  -> bool
-    // 1  -> u8
-    pub const LEN: usize = 8 + 32 + 36 + 8 + 1 + 1;
+#[account]
+pub struct Paciente {
+    pub consultorio: Pubkey,     // 32 (A qué clínica pertenece)
+    pub nombre: String,          // 4 + MAX_PATIENT_NAME
+    pub especie: String,         // 4 + 40 (Perro, Gato, etc)
+    pub ultima_visita: i64,      // 8 (Timestamp)
+    pub ultimo_tratamiento: String, // 4 + MAX_TREATMENT
+    pub deuda_pendiente: u64,    // 8
 }
 
-/* -------------------------------------------------------------------------- */
-/*                               CONTEXTOS (PDAs)                             */
-/* -------------------------------------------------------------------------- */
+// --- Contextos de Instrucciones ---
 
 #[derive(Accounts)]
-#[instruction(title: String)]
-pub struct AddItem<'info> {
+pub struct InicializarConsultorio<'info> {
     #[account(
-        init,
-        payer = owner,
-        space = StoreItem::LEN,
-        seeds = [
-            b"item_v1",
-            owner.key().as_ref(),
-            title.as_bytes()
-        ],
+        init, 
+        payer = admin, 
+        space = 8 + 32 + (4 + MAX_CLINIC_NAME) + 8,
+        seeds = [b"consultorio", admin.key().as_ref()],
         bump
     )]
-    pub store_item: Account<'info, StoreItem>,
-
+    pub consultorio: Account<'info, Consultorio>,
     #[account(mut)]
-    pub owner: Signer<'info>,
-
+    pub admin: Signer<'info>,
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct UpdateItem<'info> {
+#[instruction(nombre: String)] //Pasamos el nombre para usarlo en el seed si queremos
+pub struct RegistrarPaciente<'info> {
     #[account(
-        mut,
-        has_one = owner @ LumenError::Unauthorized,
-        seeds = [
-            b"item_v1",
-            owner.key().as_ref(),
-            store_item.title.as_bytes()
-        ],
-        bump = store_item.bump
+        init,
+        payer = admin,
+        space = 8 + 32 + (4 + MAX_PATIENT_NAME) + 60 + 8 + (4 + MAX_TREATMENT) + 8,
+        // Seed única por paciente dentro de ese consultorio
+        seeds = [b"paciente", consultorio.key().as_ref(), nombre.as_bytes()],
+        bump
     )]
-    pub store_item: Account<'info, StoreItem>,
-
-    pub owner: Signer<'info>,
+    pub paciente: Account<'info, Paciente>,
+    #[account(mut)]
+    pub consultorio: Account<'info, Consultorio>,
+    #[account(mut)]
+    pub admin: Signer<'info>,
+    pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-pub struct DeleteItem<'info> {
-    #[account(
-        mut,
-        close = owner,
-        has_one = owner @ LumenError::Unauthorized,
-        seeds = [
-            b"item_v1",
-            owner.key().as_ref(),
-            store_item.title.as_bytes()
-        ],
-        bump = store_item.bump
-    )]
-    pub store_item: Account<'info, StoreItem>,
-
-    #[account(mut)]
-    pub owner: Signer<'info>,
+pub struct GestionarPaciente<'info> {
+    #[account(mut, has_one = consultorio)]
+    pub paciente: Account<'info, Paciente>,
+    #[account(constraint = consultorio.admin == admin.key())]
+    pub consultorio: Account<'info, Consultorio>,
+    pub admin: Signer<'info>,
 }
 
-/* -------------------------------------------------------------------------- */
-/*                                   ERRORES                                  */
-/* -------------------------------------------------------------------------- */
-
 #[error_code]
-pub enum LumenError {
-    #[msg("No tienes permisos para modificar este producto.")]
-    Unauthorized,
-
-    #[msg("El título debe tener entre 1 y 32 caracteres.")]
-    InvalidTitleLength,
-
-    #[msg("El precio debe ser mayor a 0.")]
-    InvalidPrice,
+pub enum ClinicError {
+    #[msg("El texto proporcionado es demasiado largo.")]
+    TextoLargo,
+    #[msg("No tienes permisos para modificar este paciente.")]
+    NoAutorizado,
 }
